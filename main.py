@@ -8,7 +8,7 @@ from telegram.ext import ApplicationBuilder, MessageHandler, CommandHandler, fil
 logging.basicConfig(level=logging.INFO)
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
-ALLOWED_USERS = [123456789, 987654321]
+ALLOWED_USERS = [8058101860]
 
 KST = pytz.timezone('Asia/Seoul')
 
