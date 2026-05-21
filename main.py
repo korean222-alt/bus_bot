@@ -234,4 +234,7 @@ if __name__ == "__main__":
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("1", fav1))
     app.add_handler(CommandHandler("2", fav2))
-    app.​​​​​​​​​​​​​​​​
+        app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle))
+    print("봇 시작!")
+    app.run_polling()
+
