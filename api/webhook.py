@@ -1,5 +1,5 @@
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 import pytz
 from fastapi import FastAPI, Request
 
@@ -63,6 +63,18 @@ def find_next_buses(from_stop, to_stop, trips, now_min, delay=0, count=3):
     return results
 
 
+def find_all_buses(from_stop, to_stop, trips):
+    results = []
+    for trip in trips:
+        stops = [s[0] for s in trip]
+        if from_stop in stops and to_stop in stops:
+            fi = stops.index(from_stop)
+            ti = stops.index(to_stop)
+            if fi < ti:
+                results.append((trip[fi][1], trip[ti][1]))
+    return results
+
+
 def find_last_bus(from_stop, to_stop, trips):
     last = None
     for trip in trips:
@@ -75,8 +87,8 @@ def find_last_bus(from_stop, to_stop, trips):
     return last
 
 
-def current_trips():
-    now = datetime.now(KST)
+def current_trips(day_offset=0):
+    now = datetime.now(KST) + timedelta(days=day_offset)
     now_min = now.hour * 60 + now.minute
     is_weekend = now.weekday() >= 5
     sched_name = "주말" if is_weekend else "평일"
@@ -84,19 +96,34 @@ def current_trips():
     return now_min, sched_name, trips
 
 
-def route_msg(frm, to, trips, now_min, delay, sched_name):
+def route_msg(frm, to, trips, now_min, delay, sched_name, tomorrow=False):
+    day_label = "내일" if tomorrow else "오늘"
     buses = find_next_buses(frm, to, trips, now_min, delay, 3)
     if not buses:
-        return f"오늘 {frm}->{to} 버스는 더 없습니다."
+        return f"{day_label} {frm}->{to} 버스는 더 없습니다."
     delay_tag = " [지연+30분]" if delay else ""
-    msg = f"버스 {frm}->{to}{delay_tag} ({sched_name})\n---\n"
+    msg = f"버스 {frm}->{to}{delay_tag} ({day_label}, {sched_name})\n---\n"
     for i, (dep, arr) in enumerate(buses):
         wait = dep - now_min
         duration = arr - dep
-        if i == 0:
+        if i == 0 and not tomorrow:
             msg += f"다음: {fmt(dep)}->{fmt(arr)} ({wait}분후, {duration}분소요)\n"
         else:
             msg += f"{i+1}번째: {fmt(dep)}->{fmt(arr)}\n"
+    return msg
+
+
+ROUTES = [("J", "P"), ("P", "J"), ("J", "L"), ("L", "J"), ("L", "P"), ("P", "L")]
+
+
+def full_schedule_msg():
+    msg = "버스 전체 시간표\n"
+    for label, trips in [("평일", WEEKDAY_TRIPS), ("주말", WEEKEND_TRIPS)]:
+        msg += f"\n[{label}]\n"
+        for frm, to in ROUTES:
+            buses = find_all_buses(frm, to, trips)
+            if buses:
+                msg += f"{frm}->{to}: " + ", ".join(fmt(dep) for dep, arr in buses) + "\n"
     return msg
 
 
@@ -105,32 +132,35 @@ def handle_text(text: str) -> str:
 
     if text == "/start":
         return ("버스 시간표 봇\n\n즐겨찾기:\n/1 L->P\n/2 P->L\n/3 L->P 지연\n/4 P->L 지연\n\n"
-                 "직접입력: j-p, l-p 등\n지연: g l-p\n\n/all 전체보기\n/last 막차확인")
+                 "직접입력: j-p, l-p 등\n지연: g l-p\n"
+                 "내일: 맨 뒤에 t 붙이기 (예: l-p t, g l-p t, /1 t)\n\n"
+                 "/all 평일/주말 전체 시간표\n/last 막차확인")
 
-    now_min, sched_name, trips = current_trips()
+    tomorrow = False
+    if text.endswith(" t"):
+        tomorrow = True
+        text = text[:-2].strip()
+
+    day_offset = 1 if tomorrow else 0
+    now_min, sched_name, trips = current_trips(day_offset)
+    if tomorrow:
+        now_min = 0
 
     if text == "/1":
-        return route_msg("L", "P", trips, now_min, 0, sched_name)
+        return route_msg("L", "P", trips, now_min, 0, sched_name, tomorrow)
     if text == "/2":
-        return route_msg("P", "L", trips, now_min, 0, sched_name)
+        return route_msg("P", "L", trips, now_min, 0, sched_name, tomorrow)
     if text == "/3":
-        return route_msg("L", "P", trips, now_min, 30, sched_name)
+        return route_msg("L", "P", trips, now_min, 30, sched_name, tomorrow)
     if text == "/4":
-        return route_msg("P", "L", trips, now_min, 30, sched_name)
+        return route_msg("P", "L", trips, now_min, 30, sched_name, tomorrow)
 
     if text == "/all":
-        routes = [("J", "P"), ("P", "J"), ("J", "L"), ("L", "J"), ("L", "P"), ("P", "L")]
-        msg = f"오늘 남은 버스 ({sched_name})\n---\n"
-        for frm, to in routes:
-            buses = find_next_buses(frm, to, trips, now_min, 0, 3)
-            if buses:
-                msg += f"{frm}->{to}: " + ", ".join(fmt(dep) for dep, arr in buses) + "\n"
-        return msg
+        return full_schedule_msg()
 
     if text == "/last":
-        routes = [("J", "P"), ("P", "J"), ("J", "L"), ("L", "J"), ("L", "P"), ("P", "L")]
         msg = f"막차 시간 ({sched_name})\n---\n"
-        for frm, to in routes:
+        for frm, to in ROUTES:
             last = find_last_bus(frm, to, trips)
             if last:
                 dep, arr = last
@@ -152,10 +182,10 @@ def handle_text(text: str) -> str:
     valid = ["j", "l", "p"]
     parts = text.split("-")
     if len(parts) != 2 or parts[0] not in valid or parts[1] not in valid or parts[0] == parts[1]:
-        return "예: j-p / p-j / g l-p\n/start 로 목록 확인"
+        return "예: j-p / p-j / g l-p / l-p t\n/start 로 목록 확인"
 
     frm, to = parts[0].upper(), parts[1].upper()
-    return route_msg(frm, to, trips, now_min, delay, sched_name)
+    return route_msg(frm, to, trips, now_min, delay, sched_name, tomorrow)
 
 
 @app.get("/")
